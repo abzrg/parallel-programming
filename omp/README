@@ -1,0 +1,576 @@
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Unit 1: Getting started with OpenMP
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+
+Build Instruction
+-----------------
+
+    gcc -fopenmp foo.c
+    export OMP_NUM_THREADS=4
+    ./a.out
+
+
+Notes
+-----
+
+Shared memory computer: Any computer composed of
+multiple processing elements that share and address
+space. Two classes:
+  - Symmetric Multi-Processor (SMP): "equal-time"
+    access for each processor
+  - Non Uniform Address Space Multi-Processor (NUMA):
+      "near" and "far" memory
+
+
+Cache hierarchy means different processors have
+different costs to access different address ranges ...
+it's NUMA
+
+
+Process:
+  - An instance of a program execution.
+  - The execution context of a running program ... i.e.
+    the resources associated with a program’s
+    execution.
+
+
+Threads:
+  - Threads are "light weight processes”
+  - Threads share Process state among multiple threads
+    ... this greatly reduces the cost of switching
+    context.
+
+    - process state: process ID, user ID, group ID,
+      files, locks, sockets, data, heap
+
+
+An instance of a program:
+  - One process and lots of threads.
+  - Threads interact through reads/writes to a shared
+    address space.
+  - OS scheduler decides when to run which threads ...
+    interleaved for fairness.
+  - Synchronization to assure every legal order results
+    in correct results.
+
+
+OpenMP: Overview
+----------------
+
+OpenMP is a multi-threading, shared address model.
+  - Threads communicate by sharing variables.
+
+Unintended sharing of data causes race conditions:
+  - Race condition: when the program's outcome changes
+  as the threads are scheduled differently.
+
+To control race conditions:
+  - Use synchronization to protect data conflicts.
+
+Synchronization is expensive so:
+  - Change how data is accessed to minimize the need
+  for synchronization.
+
+
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+Unit 2: The core features of OpenMP
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+OpenMP Programming Model
+------------------------
+
+Fork-join parallelism:
+  - Master thread spawns a team of threads as needed.
+  - Parallelism added incrementally until performance
+    goals are met: i.e. the sequential program evolves
+    into a parallel program.
+
+               parallel Regions
+ master      .         .        .
+ thread     .          .         .
+   .    _____        _____        _____
+   .   /_____\      /_____\      /_____\
+   .  /       \    /       \    /       \
+   --<--------->--<--------->--<--------->--
+    . \_______/ .  \_______/ .  \   _ ../.... A
+     . \_____/  .   \_____/  .   \_/_\_/  .   nested
+      .         .            .    \___/  .    thread
+       .        .            .          .
+         ` .    '            '      . '
+              Sequential     Parts
+
+
+Thread Creation: Parallel Regions
+---------------------------------
+
+You create threads in OpenMP with the parallel
+construct.
+
+For example, To create a 4 thread parallel region:
+
+    double A[1000];
+
+    /* Runtime function to request a certain number
+       of threads */
+    omp_set_num_threads(4);
+
+    /* Each thread executes a copy of the
+       code within the structured block */
+    #pragma omp parallel
+    {
+      /* Runtime function returning a thread ID *
+      int ID = omp_get_thread_num();
+      pooh(ID, A);
+    }
+
+- Each thread calls pooh(ID,A) for ID = 0 to 3
+
+
+    double A[1000];
+
+    /* Clause to request a certain number of threads *
+    #pragma omp parallel num_threads(4)
+    {
+      int ID = omp_get_thread_num();
+      pooh(ID, A); /* a single copy of A is shared
+                      between all threads */
+    } /* threas wait here for all threads to finish
+         before proceeding (i.e. a barrier) */
+
+- Each thread executes the same code redundantly.
+
+
+OpenMP: what the compiler does
+------------------------------
+
+    #pragma omp parallel num_threads(4)
+    {
+      foobar();
+    }
+
+    --- analogous compiler generated code
+
+    void thunk()
+    {
+      foobar();
+    }
+
+    pthread_t tid[4];
+    for (int i = 1; i < 4; ++i) {
+      pthread_create(&tid[i], 0, thunk, 0);
+    }
+
+    thunk();
+
+    for (int i = 1; i < 4; ++i) {
+      pthread_join(tid[i])
+    }
+
+
+All known OpenMP implementations use a thread pool so
+full cost of threads creation and destruction is not
+incurred for reach parallel region.
+
+  A thread pool is a collection of threads that are
+  created in advance and then reused to execute tasks
+  as needed, rather than creating and destroying
+  threads every time a task needs to be executed.
+
+  The advantage of using a thread pool in OpenMP is
+  that it reduces the overhead associated with creating
+  and destroying threads. When a parallel region is
+  encountered, instead of creating a new set of
+  threads, the implementation can reuse threads from
+  the pool, thereby saving time and resources.
+
+Only three threads are created because the last
+parallel section will be invoked from the parent
+thread.
+
+
+Exercise 2 notes
+----------------
+
+Pay close attention to shared vs private variables.
+
+Number of threads in the team
+    int omp_get_num_threads();
+
+Thread ID or rank
+    int omp_get_thread_num();
+
+Time in seconds since a fixed point in the past
+    double omp_get_wtime();
+
+
+The SPMD (Single Problem, Multiple Data) design pattern
+-------------------------------------------------------
+
+Run the same program on P processing elements where P
+can be arbitrarily large.
+
+Use the rank ... ID ranging from 0 to (P - 1) ... to
+select between a set of tasks and to manage any shared
+data structure.
+
+This pattern is very general and has been used to
+support most (if not all) the algorithm strategy
+pattern.
+
+MPI programs almost all always use this pattern ... it
+is probably the most commonly used pattern in the
+history of parallel programming.
+
+
+Why such poor scaling? False Sharing
+------------------------------------
+
+If independent data elements happen to sit on the same
+cache line, each update will cause the cache lines to
+"slosh back and forth" (invalidate) between threads ...
+This is called "false sharing".
+
+  When one thread (t1) updates its data, it causes the
+  entire cache line to be updated in the cache memory.
+  If another thread (t2) updates a different data
+  element in the same cache line, the update in t1 will
+  invalidate the cache line in t2's cache, leading to
+  frequent cache line invalidations and cache coherence
+  traffic. This can degrade performance significantly,
+  hence the term "false sharing."
+
+  This sharing of cache lines can impair scalability,
+  especially as the number of threads or cores
+  increases.
+
+
+[         core 0          ] [         core 1          ]
+[ hw thrd 0 ] [ hw thrd 1 ] [ hw thrd 2 ] [ hw thrd 3 ]
+[..../......../...........] [...........\.........\...]
+[.../..L1 $ lines.........] [......L1 $ lines......\..]
+[../......../.............] [.............\.........\.]
+[s[0] | s[1] | s[2] | s[3]] [s[0] | s[1] | s[2] | s[3]]
+[===Shared last lvl $ and connection to IO and DRAM===]
+
+
+If you promote scalars to an array to support creation
+of an SPMD program, the array elements are contiguous
+in memory and hence share cache lines ... Results in
+poor scalability.
+
+  Solution: Pad arrays so elements you use are on
+  distinct cache lines, i.e. each element is placed on
+  its own cache line.
+
+    #define PAD_LEN 8 // assumed cache line size = 8 * sizeof(sums[0][0])
+    int sums[NUM_THREADS][PAD_LEN];
+    ...
+    sums[id][0] += ...;
+
+
+Do we really need to pad our arrays?
+
+  Padding arrays requires deep knowledge of the cache
+  architecture. Move to a machine with different sized
+  cache lines and your software performance falls
+  apart.
+
+  There has got to be a better way to deal with false
+  sharing.
+
+
+Synchronization
+---------------
+
+synchronization: bringing one or more threads to a well
+defined and known point in their execution.
+
+The two most common forms of synchronization are:
+- Barrier: each thread wait at the barrier until all
+  threads arrive.
+- Mutual exclusion: define a block of code that only
+  one thread at a time can execute
+
+Synchronization is used to impose order constraints and
+to protect access to shared data.
+
+High level synchronization:
+- critical
+- atomic
+- barrier
+- ordered
+
+Low level synchronization:
+- flush
+- locks (both simple and nested)
+
+
+Synchronization: Barrier
+------------------------
+
+Barrier: Each thread waits until all threads arrive.
+
+    #pragma omp parallel
+    {
+      int id = omp_get_thread_num();
+      A[id] = big_calc1(id);
+    #pragma omp barrier
+      B[id] = big_calc2(id, A);
+    }
+
+
+Synchronization: Critical
+------------------------
+
+Mutual exclusion: Only one thread at a time can enter a
+critical region.
+
+    float res;
+
+    #pragma omp parallel
+    {
+      float B; int i, id, nthrds;
+      id = omp_get_thread_num();
+      nthrds = omp_get_num_threads();
+
+      for(i = id; i < nthrds; i += nthrds) {
+        B = big_job(i);
+      #pragma omp critical
+        // threads wait their turn - only one at a time calls consume()
+        res += consume(B);
+      }
+    }
+
+
+Synchronization: Atomic (basic form)
+------------------------------------
+
+Atomic provides mutual exclusion but only applies to
+the update of a memory location (the update of X in the
+following example)
+
+    #pragma omp parallel
+    {
+      double tmp, B;
+      B = DOIT();
+      tmp = big_ugly(B);
+    #pragma omp atomic
+      X += tmp;
+    }
+
+The statement inside the atomic must be one of the
+following forms:
+- X binop= expr
+- X++
+- X--
+- ++X
+- --X
+
+  X is a lvalue of scalar type and binop is a
+  non-overloaded built-in operator.
+
+Additional forms of atomic were added in OpenMP 3.1.
+We will discuss these later.
+
+
+SPMD vs. worksharing
+--------------------
+
+A parallel construct by itself creates an SPMD or
+"Single Program Multiple Data" ... i.e., each thread
+redundantly executes the same code.
+
+How do you split up pathways through the code between
+threads within a team?
+  This is called worksharing
+  - Loop constructs
+  - Section/section constructs
+  - Single construct
+  - Task construct
+
+
+The loop worksharing construct
+------------------------------
+
+The loop worksharing construct splits up loop
+iterations among the threads in a team.
+
+    #pragma omp parallel
+    {
+      // c/c++: for
+      // fortran: do
+    #pragma omp for
+      for (i = 0; i < N; i++) {
+        NEAT_STUFF();
+      }
+    }
+
+  The variable `i` is made "private" to each thread by
+  default. You could do this explicitly with a
+  `private(i)` clause
+
+A motivating example:
+
+  - Sequential code
+
+    for (i = 0; i < N; i++) { a[i] = a[i] + b[i]; }
+
+  - OpenMP parallel region
+
+    #pragma omp parallel
+    {
+      int id, i, Nthrds, istart, iend;
+      id = omp_get_thread_num();
+      Nthrds = omp_get_num_threads();
+
+      istart = id * N / Nthrds;
+      iend = (id + 1) * N / Nthrds;
+      if (id == Nthrds - 1) iend = N;
+
+      for (i = istart; i < iend; i++) { a[i] = a[i] + b[i]; }
+    }
+
+  - OpenMP parallel region and worksharing construct
+
+    #pragma omp parallel
+    #pragma omp for
+      for (i = 0; i < N; i++) { a[i] = a }
+
+
+The loop worksharing construct: The schedule construct
+------------------------------------------------------
+
+The schedule clause affects how loop iterations are mapped onto threads
+
+- `schedule(static[, chunk])`
+  - Deal-out blocks of iterations of size "chunk" to
+    each thread.
+- `schedule(dynamic[, chunk])`
+  - Each thread grabs "chunk" iterations off a queue
+    until all iterations have been handled
+- `schedule(guided[, chunk])`
+  Threads dynamically grab blocks of iterations. The
+  size of the block starts large and shrinks down to
+  size `chunk` as the calculation proceeds.
+- `schedule(runtime)`
+  - Schedule and chunk size taken from OMP_SCHEDULE
+    environment variable (or the runtime library)
+- `schedule(auto)`
+  - Shecule is left up to the runtime to choose (does
+    not have to be any of the above)
+
+When to use each schedule clause:
+
+- static: pre-determined and predictable by the
+  programmer
+  - least work at runtime: scheduling done at compile
+    time
+- dynamic: unpredictable, highly variable work per
+  iteration
+  - most work at runtime: complex scheduling logic at
+    run-time
+- guided: special case of dynamic to reduce scheduling
+  overhead
+- auto: when the runtime can "learn" from previous
+  executions of the same loop
+
+
+Combined parallel/worksharing construct
+---------------------------------------
+
+OpenMP shortcut: put the `parallel` and worksharing
+directive on the same line
+
+    double res[MAX]; int i;
+    #pragma omp parallel for
+    for (i = 0; i < MAX; i++) {
+      res[i] = huge();
+    }
+
+  equivalent to:
+
+    double res[MAX]; int i;
+    #pragma omp parallel
+    {
+    #pragma omp for
+      for (i = 0; i < MAX; i++) {
+        res[i] = huge();
+      }
+    }
+
+
+Working with the loops
+----------------------
+
+Basic approach
+
+- Find compute intensive loops
+- Make the loop iterations independent ... So they can
+  safely execute in any order without loop-carried
+  dependencies.
+- Place the appropriate OpenMP directive and test.
+
+    int i, j, A[MAX];
+    j = 5; // loop carried dependency
+    for (i = 0; i < MAX; i++) {
+      j += 2;
+      A[i] = big(j);
+    }
+
+  to:
+
+    int i, A[MAX];
+    #pragma omp parallel for
+    for (i = 0; i < MAX; i++) { // Note: loop index "i" is private by default
+      int j = 5 + 2 * (i + 1); // remove loop carried dependence
+      A[i] = big(j);
+    }
+
+
+Nested Loops
+------------
+
+For perfectly rectangular nested loops we can
+parallelize multiple loops in the nest with the
+collapse clause:
+
+    #pragma omp parallel for collapse(2)
+    for (int i = 0; i < N; i++) {
+      for (int i = 0; j < M; j++) {
+        ...
+      }
+    }
+
+Will form a single loop of length NxM and then
+parallelize that.
+
+Useful if N is O(no. of threads) so parallelizing the
+outer loop makes balancing the load difficult.
+
+
+Reduction
+---------
+
+How do we handle this case?
+
+    double ave=0.0, A[MAX]; int i;
+    for (i = 0; i < MAX; i++) {
+      ave += A[i];
+    }
+    ave = ave / MAX;
+
+We are combining values into a single accumulation
+variable (ave) ... there is a true dependence between
+loop iterations that can't be trivially removed
+
+This is a very common situation ... it is called a
+"reduction".
+
+Support for reduction operations is included in most
+parallel programming environments.
+
+
+vim: tw=55
+

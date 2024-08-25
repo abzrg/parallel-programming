@@ -1,0 +1,3 @@
+#!/bin/sh -ex
+
+hyperfine --warmup 2 "$@"
